@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "protocol",
+    "chat-server",
+    "chat-client",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
+
+# 错误处理
+anyhow = "1"
+thiserror = "2"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# GUI (客户端)
+eframe = "0.33"
+egui = "0.33"
+
+# 共享协议
+protocol = { path = "protocol" }

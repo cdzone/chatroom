@@ -1,0 +1,13 @@
+[package]
+name = "chat-client"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+protocol = { workspace = true }
+tokio = { workspace = true }
+eframe = { workspace = true }
+egui = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
