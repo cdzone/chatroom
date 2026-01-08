@@ -86,6 +86,11 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
         let msg = bincode::deserialize(&self.buffer[..length])?;
         Ok(msg)
     }
+
+    /// 接收消息（read_frame 的别名）
+    pub async fn recv<M: DeserializeOwned>(&mut self) -> Result<M> {
+        self.read_frame().await
+    }
 }
 
 /// 帧写入器
@@ -124,6 +129,11 @@ impl<W: AsyncWrite + Unpin> FrameWriter<W> {
         self.writer.flush().await?;
 
         Ok(())
+    }
+
+    /// 发送消息（write_frame 的别名）
+    pub async fn send<M: Serialize>(&mut self, msg: &M) -> Result<()> {
+        self.write_frame(msg).await
     }
 }
 

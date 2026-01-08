@@ -24,10 +24,7 @@ impl ClientMessage {
         match self {
             ClientMessage::Join { username } => {
                 if username.is_empty() {
-                    return Err(ProtocolError::UsernameTooLong {
-                        len: 0,
-                        max: MAX_USERNAME_LEN,
-                    });
+                    return Err(ProtocolError::UsernameEmpty);
                 }
                 if username.len() > MAX_USERNAME_LEN {
                     return Err(ProtocolError::UsernameTooLong {
@@ -35,8 +32,18 @@ impl ClientMessage {
                         max: MAX_USERNAME_LEN,
                     });
                 }
+                // 只允许字母、数字、下划线、连字符
+                if !username
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                {
+                    return Err(ProtocolError::UsernameInvalidChars);
+                }
             }
             ClientMessage::Chat { content } => {
+                if content.is_empty() {
+                    return Err(ProtocolError::MessageEmpty);
+                }
                 if content.len() > MAX_MESSAGE_LEN {
                     return Err(ProtocolError::MessageTooLong {
                         len: content.len(),
@@ -63,7 +70,7 @@ pub enum ServerMessage {
     ChatBroadcast {
         username: String,
         content: String,
-        /// Unix 时间戳（毫秒）
+        /// Unix 时间戳（秒）
         timestamp: u64,
     },
     /// 错误消息
@@ -136,5 +143,43 @@ mod tests {
             content: "Hello!".to_string(),
         };
         assert!(msg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_username_invalid_chars() {
+        // 包含空格
+        let msg = ClientMessage::Join {
+            username: "user name".to_string(),
+        };
+        assert!(msg.validate().is_err());
+
+        // 包含特殊字符
+        let msg = ClientMessage::Join {
+            username: "user@name".to_string(),
+        };
+        assert!(msg.validate().is_err());
+
+        // 包含中文
+        let msg = ClientMessage::Join {
+            username: "用户".to_string(),
+        };
+        assert!(msg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_username_valid_chars() {
+        // 允许下划线和连字符
+        let msg = ClientMessage::Join {
+            username: "user_name-123".to_string(),
+        };
+        assert!(msg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_message_empty() {
+        let msg = ClientMessage::Chat {
+            content: "".to_string(),
+        };
+        assert!(msg.validate().is_err());
     }
 }

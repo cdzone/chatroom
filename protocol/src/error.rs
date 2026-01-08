@@ -29,9 +29,21 @@ pub enum ProtocolError {
     #[error("Connection closed")]
     ConnectionClosed,
 
+    /// 用户名为空
+    #[error("Username is empty")]
+    UsernameEmpty,
+
     /// 用户名过长
     #[error("Username too long: {len} chars (max: {max})")]
     UsernameTooLong { len: usize, max: usize },
+
+    /// 用户名包含无效字符
+    #[error("Username contains invalid characters")]
+    UsernameInvalidChars,
+
+    /// 消息为空
+    #[error("Message is empty")]
+    MessageEmpty,
 
     /// 消息过长
     #[error("Message too long: {len} bytes (max: {max})")]
