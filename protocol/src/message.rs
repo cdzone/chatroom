@@ -60,8 +60,11 @@ impl ClientMessage {
 /// 服务端发送给客户端的消息
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum ServerMessage {
-    /// 欢迎消息，包含分配的用户 ID
-    Welcome { user_id: u32 },
+    /// 欢迎消息，包含分配的用户 ID 和当前在线用户列表
+    Welcome {
+        user_id: u32,
+        online_users: Vec<String>,
+    },
     /// 用户加入通知
     UserJoined { username: String },
     /// 用户离开通知

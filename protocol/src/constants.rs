@@ -23,9 +23,6 @@ pub const HEARTBEAT_INTERVAL_SECS: u64 = 10;
 /// 服务端心跳超时（秒）- 超过此时间无消息则断开
 pub const HEARTBEAT_TIMEOUT_SECS: u64 = 30;
 
-/// 客户端心跳失败次数上限 - 连续失败此次数则断开
-pub const HEARTBEAT_MAX_FAILURES: u32 = 3;
-
 /// 加入超时（秒）- 连接后必须在此时间内发送 Join
 pub const JOIN_TIMEOUT_SECS: u64 = 30;
 

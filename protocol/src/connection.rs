@@ -97,7 +97,7 @@ mod tests {
         assert!(matches!(msg, ClientMessage::Join { .. }));
 
         // 发送响应
-        conn.send(&ServerMessage::Welcome { user_id: 1 })
+        conn.send(&ServerMessage::Welcome { user_id: 1, online_users: vec!["test_user".to_string()] })
             .await
             .unwrap();
 

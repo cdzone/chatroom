@@ -33,16 +33,34 @@ impl ChatApp {
 fn setup_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
-    // 加载系统中文字体（macOS）
-    // 优先尝试苹方字体，其次是华文黑体
-    let font_paths = [
+    // 跨平台中文字体路径
+    #[cfg(target_os = "macos")]
+    let font_paths: &[&str] = &[
         "/System/Library/Fonts/PingFang.ttc",
         "/System/Library/Fonts/STHeiti Light.ttc",
         "/System/Library/Fonts/Hiragino Sans GB.ttc",
     ];
 
+    #[cfg(target_os = "windows")]
+    let font_paths: &[&str] = &[
+        "C:\\Windows\\Fonts\\msyh.ttc",      // 微软雅黑
+        "C:\\Windows\\Fonts\\simsun.ttc",    // 宋体
+        "C:\\Windows\\Fonts\\simhei.ttf",    // 黑体
+    ];
+
+    #[cfg(target_os = "linux")]
+    let font_paths: &[&str] = &[
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/truetype/arphic/uming.ttc",
+    ];
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    let font_paths: &[&str] = &[];
+
     let mut font_loaded = false;
-    for path in &font_paths {
+    for path in font_paths {
         if let Ok(font_data) = std::fs::read(path) {
             fonts.font_data.insert(
                 "chinese".to_owned(),
@@ -290,24 +308,25 @@ impl eframe::App for ChatApp {
 
 /// 格式化时间戳
 fn format_timestamp(timestamp: u64) -> String {
-    use std::time::{Duration, UNIX_EPOCH};
+    use chrono::{Local, TimeZone};
 
-    let datetime = UNIX_EPOCH + Duration::from_secs(timestamp);
-    let now = std::time::SystemTime::now();
+    // 使用本地时区
+    match Local.timestamp_opt(timestamp as i64, 0) {
+        chrono::LocalResult::Single(dt) => {
+            let now = Local::now();
+            let duration = now.signed_duration_since(dt);
 
-    // 简单格式化：只显示时分秒
-    if let Ok(duration) = now.duration_since(datetime) {
-        if duration.as_secs() < 60 {
-            return "刚刚".to_string();
+            if duration.num_seconds() < 60 && duration.num_seconds() >= 0 {
+                return "刚刚".to_string();
+            }
+
+            dt.format("%H:%M:%S").to_string()
+        }
+        _ => {
+            // 回退到简单格式
+            format!("{}", timestamp)
         }
     }
-
-    // 使用本地时间
-    let secs = timestamp % 86400;
-    let hours = (secs / 3600 + 8) % 24; // UTC+8
-    let minutes = (secs % 3600) / 60;
-    let seconds = secs % 60;
-    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
 }
 
 /// 根据用户名生成颜色

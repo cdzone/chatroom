@@ -108,10 +108,15 @@ impl SharedState {
         }
     }
 
-    /// 获取在线用户数
-    #[allow(dead_code)]
-    fn online_count(&self) -> u32 {
-        self.connection_count.load(Ordering::SeqCst)
+    /// 获取在线用户数（已成功 Join 的用户）
+    async fn user_count(&self) -> usize {
+        self.users.read().await.len()
+    }
+
+    /// 获取所有在线用户名列表
+    async fn get_online_usernames(&self) -> Vec<String> {
+        let users = self.users.read().await;
+        users.values().map(|u| u.username.clone()).collect()
     }
 }
 
@@ -204,15 +209,15 @@ impl ChatServer {
         // 发送关闭信号
         let _ = self.shutdown_tx.send(true);
 
-        // 等待所有连接断开（最多等待 5 秒）
+        // 等待所有用户断开（最多等待 5 秒）
         let start = std::time::Instant::now();
         let timeout_duration = std::time::Duration::from_secs(5);
 
-        while self.state.online_count() > 0 {
+        while self.state.user_count().await > 0 {
             if start.elapsed() > timeout_duration {
                 warn!(
-                    "Shutdown timeout, {} connections still active",
-                    self.state.online_count()
+                    "Shutdown timeout, {} users still active",
+                    self.state.user_count().await
                 );
                 break;
             }
@@ -269,8 +274,11 @@ async fn handle_client(
                 }
             };
 
-            // 发送欢迎消息
-            conn.send(&ServerMessage::Welcome { user_id }).await?;
+            // 获取当前在线用户列表（包括刚加入的自己）
+            let online_users = state.get_online_usernames().await;
+
+            // 发送欢迎消息（包含在线用户列表）
+            conn.send(&ServerMessage::Welcome { user_id, online_users }).await?;
 
             // 广播用户加入
             let _ = broadcast_tx.send(BroadcastMsg::UserJoined {

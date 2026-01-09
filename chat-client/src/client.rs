@@ -1,5 +1,6 @@
 //! 聊天客户端核心实现
 
+use std::collections::VecDeque;
 use std::sync::mpsc as std_mpsc;
 use std::thread;
 
@@ -30,7 +31,10 @@ pub enum UiCommand {
 #[derive(Debug, Clone)]
 pub enum NetworkEvent {
     /// 连接成功
-    Connected { user_id: u32 },
+    Connected {
+        user_id: u32,
+        online_users: Vec<String>,
+    },
     /// 连接失败
     ConnectFailed { reason: String },
     /// 收到聊天消息
@@ -70,8 +74,8 @@ pub enum ConnectionState {
 pub struct ChatClient {
     /// 连接状态
     pub state: ConnectionState,
-    /// 聊天消息历史
-    pub messages: Vec<ChatMessage>,
+    /// 聊天消息历史（使用 VecDeque 提高删除效率）
+    pub messages: VecDeque<ChatMessage>,
     /// 在线用户列表
     pub online_users: Vec<String>,
     /// 发送命令到网络线程（使用 std::sync::mpsc，因为 UI 线程是同步的）
@@ -133,7 +137,7 @@ impl ChatClient {
 
         Self {
             state: ConnectionState::Disconnected,
-            messages: Vec::new(),
+            messages: VecDeque::new(),
             online_users: Vec::new(),
             cmd_tx,
             event_rx,
@@ -156,13 +160,13 @@ impl ChatClient {
 
     fn handle_event(&mut self, event: NetworkEvent) {
         match event {
-            NetworkEvent::Connected { user_id } => {
+            NetworkEvent::Connected { user_id, online_users } => {
                 if let ConnectionState::Connecting = &self.state {
                     let username = self.username.clone();
-                    self.state = ConnectionState::Connected { user_id, username: username.clone() };
+                    self.state = ConnectionState::Connected { user_id, username };
                     self.error_message = None;
-                    self.online_users.clear();
-                    self.online_users.push(username); // 自己加入列表
+                    // 使用服务端返回的在线用户列表
+                    self.online_users = online_users;
                     self.add_system_message("已连接到服务器".to_string());
                 }
             }
@@ -204,11 +208,11 @@ impl ChatClient {
     }
 
     fn add_message(&mut self, msg: ChatMessage) {
-        // 限制消息历史数量
+        // 限制消息历史数量（VecDeque::pop_front 是 O(1)）
         if self.messages.len() >= MAX_MESSAGES {
-            self.messages.remove(0);
+            self.messages.pop_front();
         }
-        self.messages.push(msg);
+        self.messages.push_back(msg);
     }
 
     fn add_system_message(&mut self, content: String) {
@@ -357,8 +361,8 @@ async fn connect_and_run(
 
     // 等待 Welcome 响应
     match conn.recv::<ServerMessage>().await? {
-        ServerMessage::Welcome { user_id } => {
-            let _ = event_tx.send(NetworkEvent::Connected { user_id }).await;
+        ServerMessage::Welcome { user_id, online_users } => {
+            let _ = event_tx.send(NetworkEvent::Connected { user_id, online_users }).await;
             info!("Joined as user_id={}", user_id);
         }
         ServerMessage::Error { message } => {
