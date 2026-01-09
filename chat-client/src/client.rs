@@ -72,6 +72,8 @@ pub struct ChatClient {
     pub state: ConnectionState,
     /// 聊天消息历史
     pub messages: Vec<ChatMessage>,
+    /// 在线用户列表
+    pub online_users: Vec<String>,
     /// 发送命令到网络线程（使用 std::sync::mpsc，因为 UI 线程是同步的）
     cmd_tx: std_mpsc::Sender<UiCommand>,
     /// 接收网络事件（使用 std::sync::mpsc，因为 UI 线程是同步的）
@@ -132,6 +134,7 @@ impl ChatClient {
         Self {
             state: ConnectionState::Disconnected,
             messages: Vec::new(),
+            online_users: Vec::new(),
             cmd_tx,
             event_rx,
             input_text: String::new(),
@@ -156,8 +159,10 @@ impl ChatClient {
             NetworkEvent::Connected { user_id } => {
                 if let ConnectionState::Connecting = &self.state {
                     let username = self.username.clone();
-                    self.state = ConnectionState::Connected { user_id, username };
+                    self.state = ConnectionState::Connected { user_id, username: username.clone() };
                     self.error_message = None;
+                    self.online_users.clear();
+                    self.online_users.push(username); // 自己加入列表
                     self.add_system_message("已连接到服务器".to_string());
                 }
             }
@@ -178,9 +183,13 @@ impl ChatClient {
                 });
             }
             NetworkEvent::UserJoined { username } => {
+                if !self.online_users.contains(&username) {
+                    self.online_users.push(username.clone());
+                }
                 self.add_system_message(format!("{} 加入了聊天室", username));
             }
             NetworkEvent::UserLeft { username } => {
+                self.online_users.retain(|u| u != &username);
                 self.add_system_message(format!("{} 离开了聊天室", username));
             }
             NetworkEvent::Error { message } => {
@@ -188,6 +197,7 @@ impl ChatClient {
             }
             NetworkEvent::Disconnected { reason } => {
                 self.state = ConnectionState::Disconnected;
+                self.online_users.clear();
                 self.add_system_message(format!("已断开连接: {}", reason));
             }
         }
@@ -404,6 +414,13 @@ async fn connect_and_run(
                             }
                             ServerMessage::Welcome { .. } => {
                                 // 忽略重复的 Welcome
+                            }
+                            ServerMessage::Shutdown { message } => {
+                                info!("Server shutdown: {}", message);
+                                let _ = event_tx.send(NetworkEvent::Disconnected {
+                                    reason: format!("服务器关闭: {}", message),
+                                }).await;
+                                return Ok(());
                             }
                         }
                     }

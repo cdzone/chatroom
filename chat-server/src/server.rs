@@ -8,7 +8,7 @@ use protocol::{
     ClientMessage, Connection, ProtocolError, ServerMessage, TcpListener, TcpTransport,
     TransportListener, HEARTBEAT_TIMEOUT, JOIN_TIMEOUT, MAX_CONNECTIONS,
 };
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, watch, RwLock};
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 
@@ -25,6 +25,8 @@ pub enum BroadcastMsg {
     UserJoined { username: String },
     /// 用户离开
     UserLeft { username: String },
+    /// 服务器关闭
+    Shutdown { message: String },
 }
 
 /// 用户信息
@@ -117,57 +119,107 @@ impl SharedState {
 pub struct ChatServer {
     state: Arc<SharedState>,
     broadcast_tx: broadcast::Sender<BroadcastMsg>,
+    /// 关闭信号发送端
+    shutdown_tx: watch::Sender<bool>,
+    /// 关闭信号接收端（用于克隆给客户端处理器）
+    shutdown_rx: watch::Receiver<bool>,
 }
 
 impl ChatServer {
     pub fn new() -> Self {
         let (broadcast_tx, _) = broadcast::channel(256);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
         Self {
             state: Arc::new(SharedState::new()),
             broadcast_tx,
+            shutdown_tx,
+            shutdown_rx,
         }
     }
 
-    /// 运行服务器
+    /// 运行服务器（支持 graceful shutdown）
     pub async fn run(&self, addr: &str) -> anyhow::Result<()> {
         let listener = TcpListener::bind(addr).await?;
         info!("Server listening on {}", listener.local_addr()?);
 
         loop {
-            match listener.accept().await {
-                Ok(transport) => {
-                    // 检查连接数限制
-                    if !self.state.try_add_connection() {
-                        warn!("Connection limit reached, rejecting new connection");
-                        // 发送错误消息后关闭
-                        let mut conn = Connection::new(transport);
-                        let _ = conn
-                            .send(&ServerMessage::Error {
-                                message: "服务器繁忙，请稍后重试".to_string(),
-                            })
-                            .await;
-                        continue;
-                    }
+            tokio::select! {
+                // 接受新连接
+                result = listener.accept() => {
+                    match result {
+                        Ok(transport) => {
+                            // 检查连接数限制
+                            if !self.state.try_add_connection() {
+                                warn!("Connection limit reached, rejecting new connection");
+                                // 发送错误消息后关闭
+                                let mut conn = Connection::new(transport);
+                                let _ = conn
+                                    .send(&ServerMessage::Error {
+                                        message: "服务器繁忙，请稍后重试".to_string(),
+                                    })
+                                    .await;
+                                continue;
+                            }
 
-                    let state = Arc::clone(&self.state);
-                    let broadcast_tx = self.broadcast_tx.clone();
-                    let broadcast_rx = self.broadcast_tx.subscribe();
+                            let state = Arc::clone(&self.state);
+                            let broadcast_tx = self.broadcast_tx.clone();
+                            let broadcast_rx = self.broadcast_tx.subscribe();
+                            let shutdown_rx = self.shutdown_rx.clone();
 
-                    tokio::spawn(async move {
-                        if let Err(e) =
-                            handle_client(transport, state.clone(), broadcast_tx, broadcast_rx)
-                                .await
-                        {
-                            debug!("Client handler error: {}", e);
+                            tokio::spawn(async move {
+                                if let Err(e) =
+                                    handle_client(transport, state.clone(), broadcast_tx, broadcast_rx, shutdown_rx)
+                                        .await
+                                {
+                                    debug!("Client handler error: {}", e);
+                                }
+                                state.remove_connection();
+                            });
                         }
-                        state.remove_connection();
-                    });
+                        Err(e) => {
+                            error!("Failed to accept connection: {}", e);
+                        }
+                    }
                 }
-                Err(e) => {
-                    error!("Failed to accept connection: {}", e);
+
+                // 监听 Ctrl+C 信号
+                _ = tokio::signal::ctrl_c() => {
+                    info!("Received shutdown signal, initiating graceful shutdown...");
+                    self.shutdown().await;
+                    break;
                 }
             }
         }
+
+        Ok(())
+    }
+
+    /// 执行 graceful shutdown
+    async fn shutdown(&self) {
+        // 广播关闭消息给所有客户端
+        let _ = self.broadcast_tx.send(BroadcastMsg::Shutdown {
+            message: "服务器正在关闭".to_string(),
+        });
+
+        // 发送关闭信号
+        let _ = self.shutdown_tx.send(true);
+
+        // 等待所有连接断开（最多等待 5 秒）
+        let start = std::time::Instant::now();
+        let timeout_duration = std::time::Duration::from_secs(5);
+
+        while self.state.online_count() > 0 {
+            if start.elapsed() > timeout_duration {
+                warn!(
+                    "Shutdown timeout, {} connections still active",
+                    self.state.online_count()
+                );
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
+        info!("Server shutdown complete");
     }
 }
 
@@ -183,6 +235,7 @@ async fn handle_client(
     state: Arc<SharedState>,
     broadcast_tx: broadcast::Sender<BroadcastMsg>,
     mut broadcast_rx: broadcast::Receiver<BroadcastMsg>,
+    mut shutdown_rx: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let mut conn = Connection::new(transport);
 
@@ -317,20 +370,28 @@ async fn handle_client(
             result = broadcast_rx.recv() => {
                 match result {
                     Ok(msg) => {
-                        let server_msg = match msg {
+                        let (server_msg, should_exit) = match msg {
                             BroadcastMsg::Chat { username, content, timestamp } => {
-                                ServerMessage::ChatBroadcast { username, content, timestamp }
+                                (ServerMessage::ChatBroadcast { username, content, timestamp }, false)
                             }
                             BroadcastMsg::UserJoined { username } => {
-                                ServerMessage::UserJoined { username }
+                                (ServerMessage::UserJoined { username }, false)
                             }
                             BroadcastMsg::UserLeft { username } => {
-                                ServerMessage::UserLeft { username }
+                                (ServerMessage::UserLeft { username }, false)
+                            }
+                            BroadcastMsg::Shutdown { message } => {
+                                (ServerMessage::Shutdown { message }, true)
                             }
                         };
 
                         if let Err(e) = writer.send(&server_msg).await {
                             debug!("Failed to send to {}: {}", username, e);
+                            break;
+                        }
+
+                        if should_exit {
+                            info!("Shutdown signal received, closing connection for {}", username);
                             break;
                         }
                     }
@@ -340,6 +401,14 @@ async fn handle_client(
                     Err(broadcast::error::RecvError::Closed) => {
                         break;
                     }
+                }
+            }
+
+            // 监听 shutdown 信号
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    info!("Shutdown signal received for {}", username);
+                    break;
                 }
             }
         }

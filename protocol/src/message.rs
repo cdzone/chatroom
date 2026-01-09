@@ -77,6 +77,8 @@ pub enum ServerMessage {
     Error { message: String },
     /// 心跳响应
     Pong,
+    /// 服务器关闭通知
+    Shutdown { message: String },
 }
 
 #[cfg(test)]

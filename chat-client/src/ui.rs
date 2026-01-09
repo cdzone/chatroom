@@ -9,6 +9,8 @@ pub struct ChatApp {
     client: ChatClient,
     /// 是否自动滚动到底部
     auto_scroll: bool,
+    /// 是否显示在线用户列表
+    show_users: bool,
 }
 
 impl ChatApp {
@@ -16,9 +18,13 @@ impl ChatApp {
         // 加载中文字体
         setup_fonts(&cc.egui_ctx);
 
+        // 设置深色主题
+        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+
         Self {
             client: ChatClient::new(),
             auto_scroll: true,
+            show_users: true,
         }
     }
 }
@@ -80,142 +86,205 @@ impl eframe::App for ChatApp {
         }
 
         // 顶部面板：连接状态
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.heading("聊天室");
-                ui.separator();
-
-                match &self.client.state {
-                    ConnectionState::Disconnected => {
-                        ui.label("未连接");
-                    }
-                    ConnectionState::Connecting => {
-                        ui.spinner();
-                        ui.label("连接中...");
-                    }
-                    ConnectionState::Connected { username, .. } => {
-                        ui.label(format!("已连接 - {}", username));
-                    }
-                }
-            });
-        });
-
-        // 底部面板：输入框
-        egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
-            if self.client.is_connected() {
+        egui::TopBottomPanel::top("top_panel")
+            .frame(egui::Frame::new().fill(egui::Color32::from_rgb(30, 30, 40)).inner_margin(8.0))
+            .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    let response = ui.add(
-                        egui::TextEdit::singleline(&mut self.client.input_text)
-                            .hint_text("输入消息...")
-                            .desired_width(ui.available_width() - 80.0),
-                    );
+                    ui.heading(egui::RichText::new("💬 聊天室").color(egui::Color32::WHITE));
+                    ui.separator();
 
-                    // 按 Enter 发送
-                    if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        self.client.send_message();
-                        response.request_focus();
-                    }
-
-                    if ui.button("发送").clicked() {
-                        self.client.send_message();
-                    }
-                });
-            } else {
-                // 登录界面
-                ui.horizontal(|ui| {
-                    ui.label("服务器:");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.client.server_addr)
-                            .desired_width(150.0),
-                    );
-
-                    ui.label("用户名:");
-                    let username_response = ui.add(
-                        egui::TextEdit::singleline(&mut self.client.username)
-                            .desired_width(100.0),
-                    );
-
-                    let can_connect = !self.client.username.is_empty()
-                        && !self.client.server_addr.is_empty()
-                        && matches!(self.client.state, ConnectionState::Disconnected);
-
-                    // 按 Enter 连接
-                    if username_response.lost_focus()
-                        && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                        && can_connect
-                    {
-                        self.client.connect();
-                    }
-
-                    if ui
-                        .add_enabled(can_connect, egui::Button::new("连接"))
-                        .clicked()
-                    {
-                        self.client.connect();
-                    }
-
-                    if matches!(self.client.state, ConnectionState::Connecting) {
-                        ui.spinner();
-                    }
-                });
-
-                if let Some(err) = &self.client.error_message {
-                    ui.colored_label(egui::Color32::RED, err);
-                }
-            }
-        });
-
-        // 中间区域：消息列表
-        egui::CentralPanel::default().show(ctx, |ui| {
-            // 断开按钮
-            if self.client.is_connected() {
-                ui.horizontal(|ui| {
-                    if ui.button("断开连接").clicked() {
-                        self.client.disconnect();
-                    }
-                    ui.checkbox(&mut self.auto_scroll, "自动滚动");
-                });
-                ui.separator();
-            }
-
-            // 消息滚动区域
-            egui::ScrollArea::vertical()
-                .auto_shrink([false; 2])
-                .stick_to_bottom(self.auto_scroll)
-                .show(ui, |ui| {
-                    for msg in &self.client.messages {
-                        if msg.is_system {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new(&msg.content)
-                                        .italics()
-                                        .color(egui::Color32::GRAY),
-                                );
-                            });
-                        } else {
-                            ui.horizontal(|ui| {
-                                // 时间戳
-                                let time = format_timestamp(msg.timestamp);
-                                ui.label(
-                                    egui::RichText::new(format!("[{}]", time))
-                                        .small()
-                                        .color(egui::Color32::DARK_GRAY),
-                                );
-
-                                // 用户名
-                                ui.label(
-                                    egui::RichText::new(format!("{}:", msg.username))
-                                        .strong()
-                                        .color(username_color(&msg.username)),
-                                );
-
-                                // 消息内容
-                                ui.label(&msg.content);
-                            });
+                    match &self.client.state {
+                        ConnectionState::Disconnected => {
+                            ui.label(egui::RichText::new("● 未连接").color(egui::Color32::GRAY));
+                        }
+                        ConnectionState::Connecting => {
+                            ui.spinner();
+                            ui.label(egui::RichText::new("连接中...").color(egui::Color32::YELLOW));
+                        }
+                        ConnectionState::Connected { username, .. } => {
+                            ui.label(egui::RichText::new("● 已连接").color(egui::Color32::GREEN));
+                            ui.separator();
+                            ui.label(egui::RichText::new(format!("👤 {}", username)).color(egui::Color32::WHITE));
                         }
                     }
+
+                    // 右侧工具栏
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if self.client.is_connected() {
+                            ui.toggle_value(&mut self.show_users, "👥 用户列表");
+                        }
+                    });
                 });
-        });
+            });
+
+        // 底部面板：输入框
+        egui::TopBottomPanel::bottom("bottom_panel")
+            .frame(egui::Frame::new().fill(egui::Color32::from_rgb(35, 35, 45)).inner_margin(8.0))
+            .show(ctx, |ui| {
+                if self.client.is_connected() {
+                    ui.horizontal(|ui| {
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut self.client.input_text)
+                                .hint_text("输入消息，按 Enter 发送...")
+                                .desired_width(ui.available_width() - 80.0)
+                                .frame(true),
+                        );
+
+                        // 按 Enter 发送
+                        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            self.client.send_message();
+                            response.request_focus();
+                        }
+
+                        if ui.add(egui::Button::new("发送").min_size(egui::vec2(60.0, 24.0))).clicked() {
+                            self.client.send_message();
+                        }
+                    });
+                } else {
+                    // 登录界面
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("服务器:");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.client.server_addr)
+                                    .desired_width(180.0),
+                            );
+
+                            ui.add_space(16.0);
+
+                            ui.label("用户名:");
+                            let username_response = ui.add(
+                                egui::TextEdit::singleline(&mut self.client.username)
+                                    .desired_width(120.0)
+                                    .hint_text("字母/数字/下划线"),
+                            );
+
+                            ui.add_space(8.0);
+
+                            let can_connect = !self.client.username.is_empty()
+                                && !self.client.server_addr.is_empty()
+                                && matches!(self.client.state, ConnectionState::Disconnected);
+
+                            // 按 Enter 连接
+                            if username_response.lost_focus()
+                                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                && can_connect
+                            {
+                                self.client.connect();
+                            }
+
+                            if ui
+                                .add_enabled(can_connect, egui::Button::new("🔗 连接").min_size(egui::vec2(70.0, 24.0)))
+                                .clicked()
+                            {
+                                self.client.connect();
+                            }
+
+                            if matches!(self.client.state, ConnectionState::Connecting) {
+                                ui.spinner();
+                            }
+                        });
+
+                        if let Some(err) = &self.client.error_message {
+                            ui.add_space(4.0);
+                            ui.label(egui::RichText::new(format!("⚠ {}", err)).color(egui::Color32::from_rgb(255, 100, 100)));
+                        }
+                    });
+                }
+            });
+
+        // 右侧面板：在线用户列表
+        if self.client.is_connected() && self.show_users {
+            egui::SidePanel::right("users_panel")
+                .resizable(true)
+                .default_width(150.0)
+                .min_width(100.0)
+                .frame(egui::Frame::new().fill(egui::Color32::from_rgb(25, 25, 35)).inner_margin(8.0))
+                .show(ctx, |ui| {
+                    ui.heading(egui::RichText::new("在线用户").size(14.0));
+                    ui.label(egui::RichText::new(format!("{} 人在线", self.client.online_users.len())).small().color(egui::Color32::GRAY));
+                    ui.separator();
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for user in &self.client.online_users {
+                            let is_self = self.client.username == *user;
+                            let text = if is_self {
+                                egui::RichText::new(format!("👤 {} (我)", user)).color(egui::Color32::from_rgb(100, 200, 255))
+                            } else {
+                                egui::RichText::new(format!("👤 {}", user)).color(username_color(user))
+                            };
+                            ui.label(text);
+                        }
+                    });
+                });
+        }
+
+        // 中间区域：消息列表
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(egui::Color32::from_rgb(20, 20, 28)).inner_margin(8.0))
+            .show(ctx, |ui| {
+                // 断开按钮和选项
+                if self.client.is_connected() {
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::Button::new("🔌 断开连接").fill(egui::Color32::from_rgb(150, 50, 50))).clicked() {
+                            self.client.disconnect();
+                        }
+                        ui.checkbox(&mut self.auto_scroll, "自动滚动");
+                    });
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                }
+
+                // 消息滚动区域
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false; 2])
+                    .stick_to_bottom(self.auto_scroll)
+                    .show(ui, |ui| {
+                        for msg in &self.client.messages {
+                            if msg.is_system {
+                                // 系统消息：居中显示
+                                ui.horizontal(|ui| {
+                                    ui.add_space(20.0);
+                                    egui::Frame::new()
+                                        .fill(egui::Color32::from_rgb(40, 40, 50))
+                                        .corner_radius(4.0)
+                                        .inner_margin(egui::vec2(8.0, 4.0))
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                egui::RichText::new(&msg.content)
+                                                    .italics()
+                                                    .size(12.0)
+                                                    .color(egui::Color32::from_rgb(150, 150, 160)),
+                                            );
+                                        });
+                                });
+                            } else {
+                                // 用户消息
+                                ui.horizontal(|ui| {
+                                    // 时间戳
+                                    let time = format_timestamp(msg.timestamp);
+                                    ui.label(
+                                        egui::RichText::new(format!("[{}]", time))
+                                            .size(11.0)
+                                            .color(egui::Color32::from_rgb(100, 100, 110)),
+                                    );
+
+                                    // 用户名
+                                    ui.label(
+                                        egui::RichText::new(format!("{}:", &msg.username))
+                                            .strong()
+                                            .color(username_color(&msg.username)),
+                                    );
+
+                                    // 消息内容
+                                    ui.label(egui::RichText::new(&msg.content).color(egui::Color32::from_rgb(220, 220, 230)));
+                                });
+                            }
+                            ui.add_space(2.0);
+                        }
+                    });
+            });
     }
 }
 
